@@ -1,8 +1,8 @@
 package com.deblox.myproject.unit.test;
 
-import com.deblox.myproject.Pinger;
-import io.vertx.core.Vertx;
+import io.vertx.core.*;
 import io.vertx.core.eventbus.EventBus;
+import io.vertx.core.json.JsonObject;
 import io.vertx.ext.unit.Async;
 import io.vertx.ext.unit.TestContext;
 import io.vertx.ext.unit.junit.VertxUnitRunner;
@@ -19,25 +19,29 @@ import org.junit.runner.RunWith;
  * @author <a href="http://tfox.org">Tim Fox</a>
  */
 @RunWith(VertxUnitRunner.class)
-public class PingVerticleTest {
+public class LinearizationTest extends AbstractVerticle {
 
   Vertx vertx;
   EventBus eb;
-  private static final Logger logger = LoggerFactory.getLogger(PingVerticleTest.class);
+  private static final Logger logger = LoggerFactory.getLogger(LinearizationTest.class);
 
   @Before
   public void before(TestContext context) {
     logger.info("@Before");
-    vertx = Vertx.vertx();
-    eb = vertx.eventBus();
 
     Async async = context.async();
-    vertx.deployVerticle(Pinger.class.getName(), res -> {
-      if (res.succeeded()) {
-        async.complete();
-      } else {
-        context.fail();
-      }
+
+    Vertx.clusteredVertx(new VertxOptions().setClustered(true), vx -> {
+      vertx = vx.result();
+      eb = vx.result().eventBus();
+      vx.result().deployVerticle(PerformanceTest.class.getName(), res -> {
+        if (res.succeeded()) {
+          async.complete();
+        } else {
+          context.fail();
+        }
+    });
+
     });
   }
 
@@ -45,9 +49,6 @@ public class PingVerticleTest {
   public void after(TestContext context) {
     logger.info("@After");
     Async async = context.async();
-
-    // the correct way after next release
-    //vertx.close(context.assertAsyncSuccess());
 
     vertx.close( event -> {
       async.complete();
@@ -57,14 +58,18 @@ public class PingVerticleTest {
 
   @Test
   public void test(TestContext test) {
+
+    logger.info("Testing");
+
     Async async = test.async();
-    eb.send("ping-address", "ping!", reply -> {
-      if (reply.succeeded()) {
-        async.complete();
-      } else {
-        test.fail();
+
+    eb.send("perftest-address", new JsonObject(), res -> {
+      if (res.succeeded()) {
       }
     });
 
+
   }
+
+
 }

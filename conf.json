@@ -2,9 +2,10 @@
 {
   "conf_source": "tld",
   "services": [
-    "com.deblox.myproject.Pinger"
+    "com.deblox.myproject.StorageEngine",
+    "com.deblox.myproject.DxHttpServer"
   ],
-  "com.deblox.myproject.Pinger": {
+  "com.deblox.myproject.StorageEngine": {
     "config": {
       "foo": "bar",
       "baz": {}
