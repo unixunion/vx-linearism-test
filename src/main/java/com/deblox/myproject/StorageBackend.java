@@ -16,7 +16,7 @@ import java.util.Map;
 public class StorageBackend {
 
   private static final Logger logger = LoggerFactory.getLogger(StorageBackend.class);
-  Map<String, JsonObject> map;
+  Map<String, Object> map;
 
   public StorageBackend() {
     map = new HashMap<>();
@@ -28,7 +28,7 @@ public class StorageBackend {
    * @param uuid
    * @return
    */
-  public JsonObject get(String uuid) {
+  public Object get(String uuid) {
     try {
       return map.get(uuid);
     } catch (Exception e) {
@@ -64,7 +64,9 @@ public class StorageBackend {
 
     // store the "data" from the object
     logger.info("Storing: " + uuid + ":" + value.getJsonObject("data"));
-    map.put(uuid, t.put("value", value.getJsonObject("data")));
+
+    // store the "data" key's contents
+    map.put(uuid, value.getValue("data"));
 
     // store the "persistTime" in the response
     t.put(DxConstants.persistTimeCost, System.nanoTime() - nanoTime + "n"); // nanosecond to persist ONLY
