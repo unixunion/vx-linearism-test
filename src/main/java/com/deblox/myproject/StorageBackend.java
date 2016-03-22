@@ -41,6 +41,13 @@ public class StorageBackend {
    * Set the new object with timeAtPersist of the "store" event, and timeToPersist the length of time since serviceA
    * received the request minus the "persist" time.
    *
+   * requires a jsonobject with a "data" object.
+   * {
+   *   "data": {
+   *
+   *   }
+   * }
+   *
    * @param uuid
    * @param value
    * @return
@@ -62,11 +69,21 @@ public class StorageBackend {
             .put("id", uuid)
             .put(DxConstants.persistWallClockTime, timeAtPersist);
 
+    // put the clock time in if its NOT present, else keep it.
+    if (value.getLong(DxConstants.persistWallClockTime, null) == null) {
+      value.put(DxConstants.persistWallClockTime, timeAtPersist);
+    } else {
+      logger.info("Keeping old persist time");
+    }
+
+    // pop the edge time off
+    value.remove(DxConstants.edgeStartTimeOfRequest);
+
     // store the "data" from the object
-    logger.info("Storing: " + uuid + ":" + value.getJsonObject("data"));
+    logger.info("Storing: " + uuid + ":" + value); //.getJsonObject("data"));
 
     // store the "data" key's contents
-    map.put(uuid, value.getValue("data"));
+    map.put(uuid, value); //.getValue("data"));
 
     // store the "persistTime" in the response
     t.put(DxConstants.persistTimeCost, System.nanoTime() - nanoTime + "n"); // nanosecond to persist ONLY

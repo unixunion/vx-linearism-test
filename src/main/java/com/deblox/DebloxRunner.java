@@ -22,6 +22,8 @@ import io.vertx.core.*;
 import io.vertx.core.json.JsonObject;
 import io.vertx.core.logging.Logger;
 import io.vertx.core.logging.LoggerFactory;
+import io.vertx.core.spi.cluster.ClusterManager;
+import io.vertx.spi.cluster.jgroups.JGroupsClusterManager;
 
 import java.io.File;
 import java.util.function.Consumer;
@@ -32,13 +34,19 @@ import java.util.function.Consumer;
 public class DebloxRunner {
 
   private static final Logger logger = LoggerFactory.getLogger(DebloxRunner.class);
+  private static final ClusterManager mgr = new JGroupsClusterManager();
 
   public static void runJava(String prefix, Class clazz, boolean clustered, String confFile) {
-    runJava(prefix, clazz, new VertxOptions().setClustered(clustered), confFile);
+    runJava(prefix, clazz, new VertxOptions()
+            .setClustered(clustered)
+            .setClusterManager(mgr), confFile);
   }
 
   public static void runJava(String prefix, Class clazz, boolean clustered) {
-    runJava(prefix, clazz, new VertxOptions().setClustered(clustered), "conf.json");
+
+    runJava(prefix, clazz, new VertxOptions()
+            .setClustered(clustered)
+            .setClusterManager(mgr), "conf.json");
   }
 
   public static void runJava(String prefix, Class clazz, VertxOptions options, String confFile) {
@@ -61,7 +69,9 @@ public class DebloxRunner {
 //  }
 
   public static void run(String runDir, String verticleID, boolean clustered) {
-    run(runDir, verticleID, new VertxOptions().setClustered(clustered), "/conf.json");
+    run(runDir, verticleID, new VertxOptions()
+            .setClustered(clustered)
+            .setClusterManager(mgr), "/conf.json");
   }
 
   public static void run(String runDir, String verticleID, VertxOptions options, String confFile) {

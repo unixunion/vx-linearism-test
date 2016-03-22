@@ -10,7 +10,6 @@ import io.vertx.core.Handler;
 import io.vertx.core.eventbus.DeliveryOptions;
 import io.vertx.core.eventbus.EventBus;
 import io.vertx.core.eventbus.Message;
-import io.vertx.core.json.Json;
 import io.vertx.core.json.JsonObject;
 import io.vertx.core.logging.Logger;
 import io.vertx.core.logging.LoggerFactory;
@@ -44,7 +43,9 @@ public class StorageEngine extends AbstractVerticle implements Handler<Message<J
   Map<String, Message<JsonObject>> waitingQueue;
 
   public void start(Future<Void> startFuture) throws Exception {
+
     logger.info("Startup with Config: " + config().toString());
+
     reporter = ConsoleReporter.forRegistry(metrics)
             .convertRatesTo(TimeUnit.SECONDS)
             .convertDurationsTo(TimeUnit.MILLISECONDS)
@@ -55,13 +56,18 @@ public class StorageEngine extends AbstractVerticle implements Handler<Message<J
     uniqueAddress = UUID.randomUUID().toString();
     logger.info("nodeId: " + uniqueAddress);
 
+    // headers for messaging
     deliveryOptions = new DeliveryOptions()
             .addHeader("nodeId", uniqueAddress)
             .setSendTimeout(5000);
 
+    // storage backend
     storageBackend = new StorageBackend();
+
+    // eventbus holder
     eb = vertx.eventBus();
 
+    // Map for pending requests when data not immediately available.
     waitingQueue = new HashMap<>();
 
     // start consumers
@@ -69,13 +75,16 @@ public class StorageEngine extends AbstractVerticle implements Handler<Message<J
     eb.consumer("storage-write-address", this); // writes are request / response and published
     eb.consumer(uniqueAddress, this); // this node can receive missing docs on this address
 
+    // completion of deployment event
     vertx.setTimer(250, res -> startFuture.complete());
 
+    // dump periodic stats
     vertx.setPeriodic(3000, res2 -> {
       logger.info("WAITQUEUE: " + waitingQueue.size());
       logger.info("OBJECTS: " + storageBackend.getSize());
+      logger.info("Dumping Objects to Log");
       storageBackend.getMap().entrySet().forEach(res -> {
-        logger.info(res.toString());
+        logger.info("Object: " + res.toString());
       });
     });
   }
@@ -127,16 +136,16 @@ public class StorageEngine extends AbstractVerticle implements Handler<Message<J
                   Responses.getRequestId(event.body())
           );
 
-          logger.info("Sending the peer: " + ruResponse.toString());
+          logger.info("Sending the peer: " + ruResponse.getJsonObject("data").toString());
 
           // send the message
           logger.info("Peer address: " + ruAddress);
-          eb.send(ruAddress, ruResponse);
+          eb.send(ruAddress, ruResponse.getJsonObject("data"));
         }
         break;
 
       /**
-       * Code for dealing with document updates either because this node requested it, or its a general announcement.
+       * Deals with document updates either because this node requested it, or its a general announcement.
        */
       case DxConstants.UPDATE_RESPONSE:
 
@@ -148,6 +157,7 @@ public class StorageEngine extends AbstractVerticle implements Handler<Message<J
 
           // Lets just throw some numbers into the document
           JsonObject urDocument = DxTimestamp.setTimeOfRequest(event.body());
+//          urDocument.put("data", urDocument.getJsonObject("data").getJsonObject("data"));
 
           // store the entire document and its metrics and whatnot.
           logger.info("Persisting Document: " + urDocument);
@@ -179,6 +189,9 @@ public class StorageEngine extends AbstractVerticle implements Handler<Message<J
 
         break;
 
+      /**
+       * writes data into a register, broadcasts write event to the cluster
+       */
       case  DxConstants.WRITE_REQUEST:
         // write a register
         logger.info("Write request for " + event.body());
@@ -195,18 +208,24 @@ public class StorageEngine extends AbstractVerticle implements Handler<Message<J
 
         break;
 
+      /**
+       * Reads some key from the storage system, if its not available, puts the request in a queue,
+       * and asks the cluster for a callback with the data.
+       */
       case DxConstants.READ_REQUEST:
         // read a register
         logger.info("Read Request: " + event.body());
 
         String rrRegisterId = Responses.getRegisterId(event.body());
+        String uniqueRequestId = UUID.randomUUID().toString();
+        event.body().put("requestId", uniqueAddress);
 
         if (storageBackend.getMap().containsKey(rrRegisterId)) {
           // return the data
           event.reply(storageBackend.get(rrRegisterId), deliveryOptions);
         } else {
           // request from cluster with timeout
-          String uniqueRequestId = UUID.randomUUID().toString();
+          logger.info("Missing this document, requesting from cluster");
 
           waitingQueue.put(uniqueRequestId, event);
 
@@ -223,113 +242,6 @@ public class StorageEngine extends AbstractVerticle implements Handler<Message<J
         }
 
         break;
-
-//    // if this request was targeted at this node, its a response to a update request
-//    if (event.address().equals(uniqueAddress)) {
-//      logger.info("Cache update for me from fellow node! " + event.body());
-//
-//      // make the document the right format for the persistence layer.
-//      JsonObject newDocument = new JsonObject().put("data", event.body().getJsonObject("value"));
-//      newDocument.put(DxConstants.edgeToPersistTimeDelta, event.body().getString(DxConstants.edgeToPersistTimeDelta));
-//
-//      storageBackend.set(event.body().getString("id"), newDocument);
-//      event.reply(new JsonObject().put("action", "thanks"), deliveryOptions);
-//
-//      // finalize the event in the queue
-//      waitingQueue.get(event.body().getString("id"))
-//              .reply(event.body(), deliveryOptions);
-//
-//      // remove the event from the waitqueue
-//      waitingQueue.remove(event.body().getString("id"));
-//
-//      // nop the future actions of this chain
-//      event.body().put("action", "nop");
-//    }
-//
-//    if (event.body().getString("action") == null) {
-//      logger.warn("No action specified");
-//      event.body().put("action", "nop");
-//    }
-//
-//    switch (event.body().getString("action")) {
-//
-//      case "nop":
-//        event.reply("nop");
-//        break;
-//
-//      // peer requesting update for a document key
-//      case "u":
-//        logger.info("Request for Update: " + event.body().toString());
-//
-//        // get document by unwrapping origin request ID
-//        JsonObject updateDocument = storageBackend.get(event.body().getString("id"));
-//        logger.info("Backend response: " + updateDocument);
-//
-//        if (updateDocument != null && event.body().getString("address") != null) {
-//          logger.info("Providing update for peer: " + updateDocument.toString());
-//          eb.send(event.body().getString("address"), updateDocument, deliveryOptions, resp -> {
-//            aided.mark();
-//            logger.info("Successfully aided a fellow node with: " + updateDocument.toString());
-//          });
-//        } else if (updateDocument == null && event.body().getString("address") == null) {
-//          logger.info("New document publish");
-//          document = storageBackend.set(event.body().getString("id"), event.body());
-//        } else {
-//          // wait! im also missing this document
-//          logger.info("Missing the requested document, not responding");
-//        }
-//        break;
-//
-//      // read a document by id from the store
-//      case "r":
-//
-//        logger.info("Reading Document: " + event.body().getString("id"));
-//        JsonObject readDocument = storageBackend.get(event.body().getString("id"));
-//
-//        if (readDocument == null) {
-//          logger.warn("No such document in the store, asking the cluster!");
-//
-//          // put the request in the waitQueue
-//          waitingQueue.put(event.body().getString("id"), event);
-//
-//          // the request
-//          JsonObject request = new JsonObject()
-//                  .put("address", uniqueAddress) // address to receive responses on
-//                  .put("action", "u")
-//                  .put("id", event.body().getString("id"));
-//
-//          // broadcast the request to the entire cluster, will handle the response on on the unique address
-//          eb.publish("storage-read-address", request, deliveryOptions);
-//
-//        } else {
-//          logger.info("Document found: " + readDocument.toString());
-//          // respond with the document to a "update" request
-//          requests.mark();
-//          event.reply(readDocument, deliveryOptions);
-//        }
-//        break;
-//
-//      // write a new document into the store, returning the id, also publish the write
-//      // to the rest of the cluster
-//      case "w":
-//        requests.mark();
-//
-//        logger.info("Storing Document " + event.body());
-//
-//        // create a new document
-//        JsonObject writeDocument = storageBackend.set(UUID.randomUUID().toString(), event.body());
-//
-//        // persist the document on the cluster
-//        if (event.address().equals("storage-write-address")) { //&& event.replyAddress() != null
-//          logger.info("Passing to Cluster: " + writeDocument);
-//          eb.publish("storage-write-address", writeDocument.put("action", "u"), deliveryOptions);
-//        } else {
-//          logger.info("Updating self only");
-//        }
-//
-//        event.reply(writeDocument, deliveryOptions);
-//
-//        break;
 
     }
   }

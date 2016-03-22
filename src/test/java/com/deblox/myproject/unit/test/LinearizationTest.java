@@ -3,11 +3,13 @@ package com.deblox.myproject.unit.test;
 import io.vertx.core.*;
 import io.vertx.core.eventbus.EventBus;
 import io.vertx.core.json.JsonObject;
+import io.vertx.core.spi.cluster.ClusterManager;
 import io.vertx.ext.unit.Async;
 import io.vertx.ext.unit.TestContext;
 import io.vertx.ext.unit.junit.VertxUnitRunner;
 import io.vertx.core.logging.Logger;
 import io.vertx.core.logging.LoggerFactory;
+import io.vertx.spi.cluster.jgroups.JGroupsClusterManager;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -31,18 +33,14 @@ public class LinearizationTest extends AbstractVerticle {
 
     Async async = context.async();
 
-    Vertx.clusteredVertx(new VertxOptions().setClustered(true), vx -> {
-      vertx = vx.result();
-      eb = vx.result().eventBus();
-      vx.result().deployVerticle(PerformanceTest.class.getName(), res -> {
-        if (res.succeeded()) {
-          async.complete();
-        } else {
-          context.fail();
-        }
+    vertx.deployVerticle(PerformanceTest.class.getName(), res -> {
+      if (res.succeeded()) {
+        async.complete();
+      } else {
+        context.fail();
+      }
     });
 
-    });
   }
 
   @After
