@@ -16,4 +16,5 @@ public class DxConstants {
   public static final String READ_REQUEST = "r";
 
   public static final String REGISTER_ID_FIELD_NAME = "register";
+  public static final String CLUSTER_ANNOUNCE = "ca";
 }

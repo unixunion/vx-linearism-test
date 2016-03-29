@@ -23,6 +23,7 @@ import io.vertx.core.json.JsonObject;
 import io.vertx.core.logging.Logger;
 import io.vertx.core.logging.LoggerFactory;
 import io.vertx.core.spi.cluster.ClusterManager;
+import io.vertx.spi.cluster.hazelcast.HazelcastClusterManager;
 import io.vertx.spi.cluster.jgroups.JGroupsClusterManager;
 
 import java.io.File;
@@ -34,7 +35,8 @@ import java.util.function.Consumer;
 public class DebloxRunner {
 
   private static final Logger logger = LoggerFactory.getLogger(DebloxRunner.class);
-  private static final ClusterManager mgr = new JGroupsClusterManager();
+//  private static final ClusterManager mgr = new JGroupsClusterManager();
+  private static final ClusterManager mgr = new HazelcastClusterManager();
 
   public static void runJava(String prefix, Class clazz, boolean clustered, String confFile) {
     runJava(prefix, clazz, new VertxOptions()

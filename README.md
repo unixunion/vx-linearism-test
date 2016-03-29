@@ -81,3 +81,5 @@ JAVA_OPTS="-Dvertx.logger-delegate-factory-class-name=io.vertx.core.logging.SLF4
 java $JAVA_OPTS -jar my-module-1.0.0-final-fat.jar -cp /dir/with/logback/xml
 ```
 
+curl -d '{"action":"w", "register": "foo2", "data": {"hello": "world2"}, "persistCount": 1}' http://localhost:8080/api/v1
+curl -d '{"action":"r", "register": "foo2"}' http://localhost:8080/api/v1

@@ -2,7 +2,6 @@ package com.deblox.myproject;
 
 import io.vertx.core.AbstractVerticle;
 import io.vertx.core.AsyncResult;
-import io.vertx.core.AsyncResultHandler;
 import io.vertx.core.Future;
 import io.vertx.core.eventbus.DeliveryOptions;
 import io.vertx.core.eventbus.EventBus;

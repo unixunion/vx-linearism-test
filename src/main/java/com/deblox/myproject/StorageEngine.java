@@ -4,15 +4,17 @@ import com.codahale.metrics.ConsoleReporter;
 import com.codahale.metrics.Meter;
 import com.codahale.metrics.MetricRegistry;
 import com.deblox.messaging.Responses;
-import io.vertx.core.AbstractVerticle;
-import io.vertx.core.Future;
-import io.vertx.core.Handler;
+import io.netty.handler.codec.serialization.ObjectDecoder;
+import io.vertx.core.*;
 import io.vertx.core.eventbus.DeliveryOptions;
 import io.vertx.core.eventbus.EventBus;
 import io.vertx.core.eventbus.Message;
+import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 import io.vertx.core.logging.Logger;
 import io.vertx.core.logging.LoggerFactory;
+import io.vertx.core.shareddata.AsyncMap;
+import io.vertx.core.shareddata.SharedData;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -40,7 +42,10 @@ public class StorageEngine extends AbstractVerticle implements Handler<Message<J
   ConsoleReporter reporter;
   String uniqueAddress;
   DeliveryOptions deliveryOptions;
+
   Map<String, Message<JsonObject>> waitingQueue;
+  SharedData sd;
+
 
   public void start(Future<Void> startFuture) throws Exception {
 
@@ -50,7 +55,7 @@ public class StorageEngine extends AbstractVerticle implements Handler<Message<J
             .convertRatesTo(TimeUnit.SECONDS)
             .convertDurationsTo(TimeUnit.MILLISECONDS)
             .build();
-    reporter.start(15, TimeUnit.SECONDS);
+    reporter.start(260, TimeUnit.SECONDS);
 
     // unique instance identifier
     uniqueAddress = UUID.randomUUID().toString();
@@ -66,6 +71,7 @@ public class StorageEngine extends AbstractVerticle implements Handler<Message<J
 
     // eventbus holder
     eb = vertx.eventBus();
+    sd = vertx.sharedData();
 
     // Map for pending requests when data not immediately available.
     waitingQueue = new HashMap<>();
@@ -75,11 +81,41 @@ public class StorageEngine extends AbstractVerticle implements Handler<Message<J
     eb.consumer("storage-write-address", this); // writes are request / response and published
     eb.consumer(uniqueAddress, this); // this node can receive missing docs on this address
 
+    sd.<String, JsonArray>getClusterWideMap("nodes", getMap -> {
+      if (getMap.succeeded()) {
+
+        // get the map
+        AsyncMap<String, JsonArray> nodesMap = getMap.result();
+
+        // create the nodes object if its missing
+        nodesMap.putIfAbsent("nodesList", new JsonArray(), newList -> {
+          if (newList.succeeded()) {
+
+            if (newList.result() == null) {
+              nodesMap.put("nodesList", new JsonArray().add(uniqueAddress), res -> {
+                logger.info("New List");
+              });
+            } else {
+              logger.info("Updating Existing List: " + newList.result().toString());
+              nodesMap.put("nodesList", newList.result().add(uniqueAddress), update -> {
+                logger.info("Update Complete");
+              });
+            }
+          }
+        });
+
+      } else {
+        logger.warn("No clusterwide map support");
+      }
+
+    });
+
+
     // completion of deployment event
     vertx.setTimer(250, res -> startFuture.complete());
 
     // dump periodic stats
-    vertx.setPeriodic(3000, res2 -> {
+    vertx.setPeriodic(360000, res2 -> {
       logger.info("WAITQUEUE: " + waitingQueue.size());
       logger.info("OBJECTS: " + storageBackend.getSize());
       logger.info("Dumping Objects to Log");
@@ -106,12 +142,20 @@ public class StorageEngine extends AbstractVerticle implements Handler<Message<J
    */
   @Override
   public void handle(Message<JsonObject> event) {
-    logger.info(event.body().toString());
+
+    logger.info("");
+    logger.info("address: " + event.address() + " reply: " + event.replyAddress() + " body:" + event.body().toString());
 
     // create a holder for the document
     JsonObject document;
 
+
     switch (event.body().getString("action")) {
+
+
+      case "ping":
+        event.reply(new JsonObject().put("action", "reply"));
+        break;
 
       /**
        * code for dealing with "request-for-update" from peers
@@ -157,10 +201,10 @@ public class StorageEngine extends AbstractVerticle implements Handler<Message<J
 
           // Lets just throw some numbers into the document
           JsonObject urDocument = DxTimestamp.setTimeOfRequest(event.body());
-//          urDocument.put("data", urDocument.getJsonObject("data").getJsonObject("data"));
 
           // store the entire document and its metrics and whatnot.
           logger.info("Persisting Document: " + urDocument);
+          event.body().put("nodes.persisted.to", event.body().getJsonArray("nodes.persisted.to", new JsonArray()).add(uniqueAddress));
           storageBackend.set(Responses.getRegisterId(event.body()), urDocument);
 
           // if its NOT a publish
@@ -168,8 +212,31 @@ public class StorageEngine extends AbstractVerticle implements Handler<Message<J
             // create a response to the peer
             urResponse = DxTimestamp.setDeltaTimeSinceRequestStart(event.body());
 
-            // send thanks
-            Responses.sendOK(this.getClass().getSimpleName(), event, deliveryOptions, urResponse);
+            // if this update needs to be persisted across nodes
+            if (event.body().containsKey("persistCount") && event.body().getInteger("persistCount")>0) {
+              logger.info("UR: Ensuring Persist Count is honoured: " + event.body());
+              event.body().put("persistCount", (event.body().getInteger("persistCount"))-1);
+              eb.send("storage-write-address", event.body().put("action", DxConstants.UPDATE_RESPONSE), deliveryOptions, persist-> {
+                if (persist.succeeded()) {
+                  logger.info("UR Persist Response," + persist.result().body());
+                  JsonObject wrDocument = storageBackend.set(Responses.getRegisterId(event.body()), event.body());
+                  wrDocument.put("cluster.persist.sync", true);
+                  event.reply(wrDocument, deliveryOptions);
+                } else {
+                  logger.error("UR: Persist failure");
+                  Responses.sendError(this.getClass().getSimpleName(), event,  "error honouring persistence");
+                }
+              });
+            } else {
+              // send thanks
+              logger.info("Confirming Persist");
+              event.reply(urResponse, deliveryOptions);
+//              Responses.sendOK(this.getClass().getSimpleName(), event, deliveryOptions, urResponse);
+            }
+
+
+
+
 
           } else {
             logger.info("Discontinue, reply address:" + event.replyAddress());
@@ -199,12 +266,44 @@ public class StorageEngine extends AbstractVerticle implements Handler<Message<J
         String wrRegisterId = Responses.getRegisterId(event.body());
 
         // persist the entire document as is.
+        event.body().put("nodes.persisted.to", event.body().getJsonArray("nodes.persisted.to", new JsonArray()).add(uniqueAddress));
         JsonObject wrDocument = storageBackend.set(wrRegisterId, event.body());
+
 
         // tell cluster about the new document
         eb.publish("storage-write-address", event.body().put("action", DxConstants.UPDATE_RESPONSE), deliveryOptions);
 
-        event.reply(wrDocument, deliveryOptions);
+        // if persistence is demanaded before this call returns
+        if (event.body().containsKey("persistCount") && event.body().getInteger("persistCount")>0) {
+          logger.info("WR: Ensuring Persist Count is honoured" + event.body());
+          event.body().put("persistCount", (event.body().getInteger("persistCount"))-1);
+
+          getRandomNode(randomAddress -> {
+            if (randomAddress != null) {
+              logger.info("Asking " + randomAddress + " to Persist");
+              JsonObject persistRequest = event.body()
+                      .put("action", DxConstants.UPDATE_RESPONSE);
+
+              // send the persistence request to the cluster
+              eb.send(randomAddress, persistRequest, deliveryOptions, persist-> {
+                if (persist.succeeded()) {
+                  logger.info("Persist succeeded: " + persist.result().body().toString());
+                  wrDocument.put("cluster.persist.sync", true);
+                  storageBackend.set(Responses.getRegisterId(event.body()), wrDocument);
+                  event.reply(wrDocument, deliveryOptions);
+                } else {
+                  logger.error("Persist Failed");
+                  Responses.sendError(this.getClass().getSimpleName(), event, "unable to persist across enough nodes");
+                }
+              });
+            }
+          });
+
+
+        } else {
+          wrDocument.put("cluster.persist.async", true);
+          event.reply(wrDocument, deliveryOptions);
+        }
 
         break;
 
@@ -245,4 +344,58 @@ public class StorageEngine extends AbstractVerticle implements Handler<Message<J
 
     }
   }
+
+
+
+
+  private void getRandomNode(Handler<String> handler) {
+    sd.<String, JsonArray>getClusterWideMap("nodes", res -> {
+      if (res.succeeded()) {
+        AsyncMap<String, JsonArray> nodesMap = res.result();
+
+        nodesMap.get("nodesList", res2 -> {
+          if (res2.succeeded()) {
+            logger.info("Got Nodes List: " + res2.result().toString());
+
+            // remove my address from the options
+            JsonArray jo = res2.result();
+            jo.remove(uniqueAddress);
+
+            if (jo.size()>1) {
+
+//            boolean foundNode = false;
+              long t = vertx.setPeriodic(100, tr -> {
+                // get a address
+                String nodeAddress = jo.getString((int) Math.floor(Math.random() * jo.size()));
+                eb.send(nodeAddress, new JsonObject().put("action", "ping"), deliveryOptions, ping -> {
+                  if (ping.succeeded()) {
+                    vertx.cancelTimer(tr);
+                    handler.handle(nodeAddress);
+                  } else {
+                    logger.warn("Node " + nodeAddress + " is dead");
+                    jo.remove(nodeAddress);
+                    res2.result().remove(nodeAddress);
+                  }
+                });
+              });
+            } else {
+              logger.warn("Cluster is too small");
+            }
+
+            // call the handler with the address
+//            handler.handle(nodeAddress);
+
+          } else {
+            logger.error("Unable to get node from map");
+            handler.handle(null);
+          }
+        });
+
+      } else {
+        logger.warn("No clusterwide map support");
+        handler.handle(null);
+      }
+    });
+  }
+
 }

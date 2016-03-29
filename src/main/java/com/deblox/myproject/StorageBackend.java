@@ -77,7 +77,7 @@ public class StorageBackend {
     }
 
     // pop the edge time off
-    value.remove(DxConstants.edgeStartTimeOfRequest);
+//    value.remove(DxConstants.edgeStartTimeOfRequest);
 
     // store the "data" from the object
     logger.info("Storing: " + uuid + ":" + value); //.getJsonObject("data"));
